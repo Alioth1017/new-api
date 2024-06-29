@@ -27,7 +27,9 @@ func testChannel(channel *model.Channel, testModel string) (err error, openaiErr
 	if channel.Type == common.ChannelTypeMidjourney {
 		return errors.New("midjourney channel test is not supported"), nil
 	}
-	common.SysLog(fmt.Sprintf("testing channel %d with model %s", channel.Id, testModel))
+	if channel.Type == common.ChannelTypeSunoAPI {
+		return errors.New("suno channel test is not supported"), nil
+	}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = &http.Request{
@@ -54,18 +56,36 @@ func testChannel(channel *model.Channel, testModel string) (err error, openaiErr
 	}
 
 	meta := relaycommon.GenRelayInfo(c)
-	apiType := constant.ChannelType2APIType(channel.Type)
+	apiType, _ := constant.ChannelType2APIType(channel.Type)
 	adaptor := relay.GetAdaptor(apiType)
 	if adaptor == nil {
 		return fmt.Errorf("invalid api type: %d, adaptor is nil", apiType), nil
 	}
 	if testModel == "" {
-		testModel = adaptor.GetModelList()[0]
-		meta.UpstreamModelName = testModel
+		if channel.TestModel != nil && *channel.TestModel != "" {
+			testModel = *channel.TestModel
+		} else {
+			testModel = adaptor.GetModelList()[0]
+		}
+	} else {
+		modelMapping := *channel.ModelMapping
+		if modelMapping != "" && modelMapping != "{}" {
+			modelMap := make(map[string]string)
+			err := json.Unmarshal([]byte(modelMapping), &modelMap)
+			if err != nil {
+				openaiErr := service.OpenAIErrorWrapperLocal(err, "unmarshal_model_mapping_failed", http.StatusInternalServerError).Error
+				return err, &openaiErr
+			}
+			if modelMap[testModel] != "" {
+				testModel = modelMap[testModel]
+			}
+		}
 	}
+
 	request := buildTestRequest()
 	request.Model = testModel
 	meta.UpstreamModelName = testModel
+	common.SysLog(fmt.Sprintf("testing channel %d with model %s", channel.Id, testModel))
 
 	adaptor.Init(meta, *request)
 
@@ -83,11 +103,11 @@ func testChannel(channel *model.Channel, testModel string) (err error, openaiErr
 	if err != nil {
 		return err, nil
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp != nil && resp.StatusCode != http.StatusOK {
 		err := relaycommon.RelayErrorHandler(resp)
 		return fmt.Errorf("status code %d: %s", resp.StatusCode, err.Error.Message), &err.Error
 	}
-	usage, respErr, _ := adaptor.DoResponse(c, resp, meta)
+	usage, respErr := adaptor.DoResponse(c, resp, meta)
 	if respErr != nil {
 		return fmt.Errorf("%s", respErr.Error.Message), &respErr.Error
 	}
@@ -108,6 +128,7 @@ func buildTestRequest() *dto.GeneralOpenAIRequest {
 	testRequest := &dto.GeneralOpenAIRequest{
 		Model:     "", // this will be set later
 		MaxTokens: 1,
+		Stream:    false,
 	}
 	content, _ := json.Marshal("hi")
 	testMessage := dto.Message{
@@ -201,11 +222,18 @@ func testAllChannels(notify bool) error {
 			if channel.AutoBan != nil && *channel.AutoBan == 0 {
 				ban = false
 			}
-			if isChannelEnabled && service.ShouldDisableChannel(openaiErr, -1) && ban {
-				service.DisableChannel(channel.Id, channel.Name, err.Error())
-			}
-			if !isChannelEnabled && service.ShouldEnableChannel(err, openaiErr) {
-				service.EnableChannel(channel.Id, channel.Name)
+			if openaiErr != nil {
+				openAiErrWithStatus := dto.OpenAIErrorWithStatusCode{
+					StatusCode: -1,
+					Error:      *openaiErr,
+					LocalError: false,
+				}
+				if isChannelEnabled && service.ShouldDisableChannel(&openAiErrWithStatus) && ban {
+					service.DisableChannel(channel.Id, channel.Name, err.Error())
+				}
+				if !isChannelEnabled && service.ShouldEnableChannel(err, openaiErr, channel.Status) {
+					service.EnableChannel(channel.Id, channel.Name)
+				}
 			}
 			channel.UpdateResponseTime(milliseconds)
 			time.Sleep(common.RequestInterval)

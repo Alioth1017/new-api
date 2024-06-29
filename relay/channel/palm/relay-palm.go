@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"one-api/common"
-	"one-api/constant"
 	"one-api/dto"
 	relaycommon "one-api/relay/common"
 	"one-api/service"
@@ -62,7 +61,7 @@ func responsePaLM2OpenAI(response *PaLMChatResponse) *dto.OpenAITextResponse {
 func streamResponsePaLM2OpenAI(palmResponse *PaLMChatResponse) *dto.ChatCompletionsStreamResponse {
 	var choice dto.ChatCompletionsStreamResponseChoice
 	if len(palmResponse.Candidates) > 0 {
-		choice.Delta.Content = palmResponse.Candidates[0].Content
+		choice.Delta.SetContentString(palmResponse.Candidates[0].Content)
 	}
 	choice.FinishReason = &relaycommon.StopFinishReason
 	var response dto.ChatCompletionsStreamResponse
@@ -157,7 +156,7 @@ func palmHandler(c *gin.Context, resp *http.Response, promptTokens int, model st
 		}, nil
 	}
 	fullTextResponse := responsePaLM2OpenAI(&palmResponse)
-	completionTokens, _, _ := service.CountTokenText(palmResponse.Candidates[0].Content, model, constant.ShouldCheckCompletionSensitive())
+	completionTokens, _ := service.CountTokenText(palmResponse.Candidates[0].Content, model)
 	usage := dto.Usage{
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,

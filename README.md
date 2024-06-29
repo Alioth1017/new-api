@@ -5,8 +5,6 @@
 > 本项目为开源项目，在[One API](https://github.com/songquanpeng/one-api)的基础上进行二次开发，感谢原作者的无私奉献。 
 > 使用者必须在遵循 OpenAI 的[使用条款](https://openai.com/policies/terms-of-use)以及**法律法规**的情况下使用，不得用于非法用途。
 
-
-> [!WARNING]
 > 本项目为个人学习使用，不保证稳定性，且不提供任何技术支持，使用者必须在遵循 OpenAI 的使用条款以及法律法规的情况下使用，不得用于非法用途。  
 > 根据[《生成式人工智能服务管理暂行办法》](http://www.cac.gov.cn/2023-07/13/c_1690898327029107.htm)的要求，请勿对中国地区公众提供一切未经备案的生成式人工智能服务。
 
@@ -47,6 +45,11 @@
     2. 对[@Botfather](https://t.me/botfather)输入指令/setdomain
     3. 选择你的bot，然后输入http(s)://你的网站地址/login
     4. Telegram Bot 名称是bot username 去掉@后的字符串
+13. 添加 [Suno API](https://github.com/Suno-API/Suno-API)接口的支持，[对接文档](Suno.md)，支持的接口如下：
+    + [x] /suno/submit/music
+    + [x] /suno/submit/lyrics
+    + [x] /suno/fetch
+    + [x] /suno/fetch/:id
 
 ## 模型支持
 此版本额外支持以下模型：
@@ -56,10 +59,37 @@
 4. [Ollama](https://github.com/ollama/ollama?tab=readme-ov-file)，添加渠道时，密钥可以随便填写，默认的请求地址是[http://localhost:11434](http://localhost:11434)，如果需要修改请在渠道中修改
 5. [Midjourney-Proxy(Plus)](https://github.com/novicezk/midjourney-proxy)接口，[对接文档](Midjourney.md)
 6. [零一万物](https://platform.lingyiwanwu.com/)
+7. 自定义渠道，支持填入完整调用地址
+8. [Suno API](https://github.com/Suno-API/Suno-API) 接口，[对接文档](Suno.md)
 
 您可以在渠道中添加自定义模型gpt-4-gizmo-*，此模型并非OpenAI官方模型，而是第三方模型，使用官方key无法调用。
 
+## 渠道重试
+渠道重试功能已经实现，可以在`设置->运营设置->通用设置`设置重试次数，**建议开启缓存**功能。  
+如果开启了重试功能，第一次重试使用同优先级，第二次重试使用下一个优先级，以此类推。  
+### 缓存设置方法
+1. `REDIS_CONN_STRING`：设置之后将使用 Redis 作为缓存使用。
+    + 例子：`REDIS_CONN_STRING=redis://default:redispw@localhost:49153`
+2. `MEMORY_CACHE_ENABLED`：启用内存缓存（如果设置了`REDIS_CONN_STRING`，则无需手动设置），会导致用户额度的更新存在一定的延迟，可选值为 `true` 和 `false`，未设置则默认为 `false`。
+    + 例子：`MEMORY_CACHE_ENABLED=true`
+### 为什么有的时候没有重试
+这些错误码不会重试：400，504，524
+### 我想让400也重试
+在`渠道->编辑`中，将`状态码复写`改为
+```json
+{
+  "400": "500"
+}
+```
+可以实现400错误转为500错误，从而重试
+
+## 比原版One API多出的配置
+- `STREAMING_TIMEOUT`：设置流式一次回复的超时时间，默认为 30 秒
+
 ## 部署
+### 部署要求
+- 本地数据库（默认）：SQLite（Docker 部署默认使用 SQLite，必须挂载 `/data` 目录到宿主机）
+- 远程数据库：MySQL 版本 >= 5.7.8，PgSQL 版本 >= 9.6
 ### 基于 Docker 进行部署
 ```shell
 # 使用 SQLite 的部署命令：
@@ -78,8 +108,14 @@ docker run --name new-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -
 docker run --name new-api -d --restart always -p 3000:3000 -e SQL_DSN="root:123456@tcp(宝塔的服务器地址:宝塔数据库端口)/宝塔数据库名称" -e TZ=Asia/Shanghai -v /www/wwwroot/new-api:/data calciumion/new-api:latest
 # 注意：数据库要开启远程访问，并且只允许服务器IP访问
 ```
+### 默认账号密码
+默认账号root 密码123456
+
 ## Midjourney接口设置文档
 [对接文档](Midjourney.md)
+
+## Suno接口设置文档
+[对接文档](Suno.md)
 
 ## 交流群
 <img src="https://github.com/Calcium-Ion/new-api/assets/61247483/de536a8a-0161-47a7-a0a2-66ef6de81266" width="300">

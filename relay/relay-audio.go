@@ -20,15 +20,6 @@ import (
 	"time"
 )
 
-var availableVoices = []string{
-	"alloy",
-	"echo",
-	"fable",
-	"onyx",
-	"nova",
-	"shimmer",
-}
-
 func AudioHelper(c *gin.Context, relayMode int) *dto.OpenAIErrorWithStatusCode {
 	tokenId := c.GetInt("token_id")
 	channelType := c.GetInt("channel")
@@ -59,15 +50,18 @@ func AudioHelper(c *gin.Context, relayMode int) *dto.OpenAIErrorWithStatusCode {
 		if audioRequest.Voice == "" {
 			return service.OpenAIErrorWrapper(errors.New("voice is required"), "required_field_missing", http.StatusBadRequest)
 		}
-		if !common.StringsContains(availableVoices, audioRequest.Voice) {
-			return service.OpenAIErrorWrapper(errors.New("voice must be one of "+strings.Join(availableVoices, ", ")), "invalid_field_value", http.StatusBadRequest)
-		}
 	}
 	var err error
 	promptTokens := 0
 	preConsumedTokens := common.PreConsumedQuota
 	if strings.HasPrefix(audioRequest.Model, "tts-1") {
-		promptTokens, err, _ = service.CountAudioToken(audioRequest.Input, audioRequest.Model, constant.ShouldCheckPromptSensitive())
+		if constant.ShouldCheckPromptSensitive() {
+			err = service.CheckSensitiveInput(audioRequest.Input)
+			if err != nil {
+				return service.OpenAIErrorWrapper(err, "sensitive_words_detected", http.StatusBadRequest)
+			}
+		}
+		promptTokens, err = service.CountAudioToken(audioRequest.Input, audioRequest.Model)
 		if err != nil {
 			return service.OpenAIErrorWrapper(err, "count_audio_token_failed", http.StatusInternalServerError)
 		}
@@ -99,6 +93,22 @@ func AudioHelper(c *gin.Context, relayMode int) *dto.OpenAIErrorWithStatusCode {
 			return service.OpenAIErrorWrapper(err, "pre_consume_token_quota_failed", http.StatusForbidden)
 		}
 	}
+
+	succeed := false
+	defer func() {
+		if succeed {
+			return
+		}
+		if preConsumedQuota > 0 {
+			// we need to roll back the pre-consumed quota
+			defer func() {
+				go func() {
+					// negative means add quota back for token & user
+					returnPreConsumedQuota(c, tokenId, userQuota, preConsumedQuota)
+				}()
+			}()
+		}
+	}()
 
 	// map model name
 	modelMapping := c.GetString("model_mapping")
@@ -163,6 +173,7 @@ func AudioHelper(c *gin.Context, relayMode int) *dto.OpenAIErrorWithStatusCode {
 	if resp.StatusCode != http.StatusOK {
 		return relaycommon.RelayErrorHandler(resp)
 	}
+	succeed = true
 
 	var audioResponse dto.AudioResponse
 
@@ -173,7 +184,7 @@ func AudioHelper(c *gin.Context, relayMode int) *dto.OpenAIErrorWithStatusCode {
 			if strings.HasPrefix(audioRequest.Model, "tts-1") {
 				quota = promptTokens
 			} else {
-				quota, err, _ = service.CountAudioToken(audioResponse.Text, audioRequest.Model, constant.ShouldCheckCompletionSensitive())
+				quota, err = service.CountAudioToken(audioResponse.Text, audioRequest.Model)
 			}
 			quota = int(float64(quota) * ratio)
 			if ratio != 0 && quota <= 0 {
@@ -191,7 +202,10 @@ func AudioHelper(c *gin.Context, relayMode int) *dto.OpenAIErrorWithStatusCode {
 			if quota != 0 {
 				tokenName := c.GetString("token_name")
 				logContent := fmt.Sprintf("模型倍率 %.2f，分组倍率 %.2f", modelRatio, groupRatio)
-				model.RecordConsumeLog(ctx, userId, channelId, promptTokens, 0, audioRequest.Model, tokenName, quota, logContent, tokenId, userQuota, int(useTimeSeconds), false)
+				other := make(map[string]interface{})
+				other["model_ratio"] = modelRatio
+				other["group_ratio"] = groupRatio
+				model.RecordConsumeLog(ctx, userId, channelId, promptTokens, 0, audioRequest.Model, tokenName, quota, logContent, tokenId, userQuota, int(useTimeSeconds), false, other)
 				model.UpdateUserUsedQuotaAndRequestCount(userId, quota)
 				channelId := c.GetInt("channel_id")
 				model.UpdateChannelUsedQuota(channelId, quota)

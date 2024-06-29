@@ -110,11 +110,13 @@ func coverMidjourneyTaskDto(c *gin.Context, originTask *model.Midjourney) (midjo
 	midjourneyTask.StartTime = originTask.StartTime
 	midjourneyTask.FinishTime = originTask.FinishTime
 	midjourneyTask.ImageUrl = ""
-	if originTask.ImageUrl != "" {
-		midjourneyTask.ImageUrl = common.ServerAddress + "/mj/image/" + originTask.MjId
+	if originTask.ImageUrl != "" && constant.MjForwardUrlEnabled {
+		midjourneyTask.ImageUrl = constant.ServerAddress + "/mj/image/" + originTask.MjId
 		if originTask.Status != "SUCCESS" {
 			midjourneyTask.ImageUrl += "?rand=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 		}
+	} else {
+		midjourneyTask.ImageUrl = originTask.ImageUrl
 	}
 	midjourneyTask.Status = originTask.Status
 	midjourneyTask.FailReason = originTask.FailReason
@@ -153,10 +155,10 @@ func RelaySwapFace(c *gin.Context) *dto.MidjourneyResponse {
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "sour_base64_and_target_base64_is_required")
 	}
 	modelName := service.CoverActionToModelName(constant.MjActionSwapFace)
-	modelPrice := common.GetModelPrice(modelName, true)
+	modelPrice, success := common.GetModelPrice(modelName, true)
 	// 如果没有配置价格，则使用默认价格
-	if modelPrice == -1 {
-		defaultPrice, ok := common.DefaultModelPrice[modelName]
+	if !success {
+		defaultPrice, ok := common.GetDefaultModelRatioMap()[modelName]
 		if !ok {
 			modelPrice = 0.1
 		} else {
@@ -180,7 +182,7 @@ func RelaySwapFace(c *gin.Context) *dto.MidjourneyResponse {
 			Description: "quota_not_enough",
 		}
 	}
-	requestURL := c.Request.URL.String()
+	requestURL := getMjRequestPath(c.Request.URL.String())
 	baseURL := c.GetString("base_url")
 	fullRequestURL := fmt.Sprintf("%s%s", baseURL, requestURL)
 	mjResp, _, err := service.DoMidjourneyHttpRequest(c, time.Second*60, fullRequestURL)
@@ -200,7 +202,10 @@ func RelaySwapFace(c *gin.Context) *dto.MidjourneyResponse {
 			if quota != 0 {
 				tokenName := c.GetString("token_name")
 				logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s", modelPrice, groupRatio, constant.MjActionSwapFace)
-				model.RecordConsumeLog(ctx, userId, channelId, 0, 0, modelName, tokenName, quota, logContent, tokenId, userQuota, 0, false)
+				other := make(map[string]interface{})
+				other["model_price"] = modelPrice
+				other["group_ratio"] = groupRatio
+				model.RecordConsumeLog(ctx, userId, channelId, 0, 0, modelName, tokenName, quota, logContent, tokenId, userQuota, 0, false, other)
 				model.UpdateUserUsedQuotaAndRequestCount(userId, quota)
 				channelId := c.GetInt("channel_id")
 				model.UpdateChannelUsedQuota(channelId, quota)
@@ -260,7 +265,7 @@ func RelayMidjourneyTaskImageSeed(c *gin.Context) *dto.MidjourneyResponse {
 	c.Set("channel_id", originTask.ChannelId)
 	c.Request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", channel.Key))
 
-	requestURL := c.Request.URL.String()
+	requestURL := getMjRequestPath(c.Request.URL.String())
 	fullRequestURL := fmt.Sprintf("%s%s", channel.GetBaseURL(), requestURL)
 	midjResponseWithStatus, _, err := service.DoMidjourneyHttpRequest(c, time.Second*30, fullRequestURL)
 	if err != nil {
@@ -440,7 +445,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayMode int) *dto.MidjourneyRespons
 	}
 
 	//baseURL := common.ChannelBaseURLs[channelType]
-	requestURL := c.Request.URL.String()
+	requestURL := getMjRequestPath(c.Request.URL.String())
 
 	baseURL := c.GetString("base_url")
 
@@ -449,10 +454,10 @@ func RelayMidjourneySubmit(c *gin.Context, relayMode int) *dto.MidjourneyRespons
 	fullRequestURL := fmt.Sprintf("%s%s", baseURL, requestURL)
 
 	modelName := service.CoverActionToModelName(midjRequest.Action)
-	modelPrice := common.GetModelPrice(modelName, true)
+	modelPrice, success := common.GetModelPrice(modelName, true)
 	// 如果没有配置价格，则使用默认价格
-	if modelPrice == -1 {
-		defaultPrice, ok := common.DefaultModelPrice[modelName]
+	if !success {
+		defaultPrice, ok := common.GetDefaultModelRatioMap()[modelName]
 		if !ok {
 			modelPrice = 0.1
 		} else {
@@ -496,7 +501,10 @@ func RelayMidjourneySubmit(c *gin.Context, relayMode int) *dto.MidjourneyRespons
 			if quota != 0 {
 				tokenName := c.GetString("token_name")
 				logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s", modelPrice, groupRatio, midjRequest.Action)
-				model.RecordConsumeLog(ctx, userId, channelId, 0, 0, modelName, tokenName, quota, logContent, tokenId, userQuota, 0, false)
+				other := make(map[string]interface{})
+				other["model_price"] = modelPrice
+				other["group_ratio"] = groupRatio
+				model.RecordConsumeLog(ctx, userId, channelId, 0, 0, modelName, tokenName, quota, logContent, tokenId, userQuota, 0, false, other)
 				model.UpdateUserUsedQuotaAndRequestCount(userId, quota)
 				channelId := c.GetInt("channel_id")
 				model.UpdateChannelUsedQuota(channelId, quota)
@@ -530,7 +538,16 @@ func RelayMidjourneySubmit(c *gin.Context, relayMode int) *dto.MidjourneyRespons
 		ChannelId:   c.GetInt("channel_id"),
 		Quota:       quota,
 	}
-
+	if midjResponse.Code == 3 {
+		//无实例账号自动禁用渠道（No available account instance）
+		channel, err := model.GetChannelById(midjourneyTask.ChannelId, true)
+		if err != nil {
+			common.SysError("get_channel_null: " + err.Error())
+		}
+		if channel.AutoBan != nil && *channel.AutoBan == 1 {
+			model.UpdateChannelStatusById(midjourneyTask.ChannelId, 2, "No available account instance")
+		}
+	}
 	if midjResponse.Code != 1 && midjResponse.Code != 21 && midjResponse.Code != 22 {
 		//非1-提交成功,21-任务已存在和22-排队中，则记录错误原因
 		midjourneyTask.FailReason = midjResponse.Description
@@ -604,4 +621,16 @@ type taskChangeParams struct {
 	ID     string
 	Action string
 	Index  int
+}
+
+func getMjRequestPath(path string) string {
+	requestURL := path
+	if strings.Contains(requestURL, "/mj-") {
+		urls := strings.Split(requestURL, "/mj/")
+		if len(urls) < 2 {
+			return requestURL
+		}
+		requestURL = "/mj/" + urls[1]
+	}
+	return requestURL
 }

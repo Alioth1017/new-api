@@ -64,6 +64,17 @@ func authHelper(c *gin.Context, minRole int) {
 	c.Next()
 }
 
+func TryUserAuth() func(c *gin.Context) {
+	return func(c *gin.Context) {
+		session := sessions.Default(c)
+		id := session.Get("id")
+		if id != nil {
+			c.Set("id", id)
+		}
+		c.Next()
+	}
+}
+
 func UserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		authHelper(c, common.RoleCommonUser)
@@ -127,7 +138,7 @@ func TokenAuth() func(c *gin.Context) {
 		}
 		if len(parts) > 1 {
 			if model.IsAdmin(token.UserId) {
-				c.Set("channelId", parts[1])
+				c.Set("specific_channel_id", parts[1])
 			} else {
 				abortWithOpenAiMessage(c, http.StatusForbidden, "普通用户不支持指定渠道")
 				return

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"gorm.io/gorm"
 	"one-api/common"
 )
@@ -10,6 +11,7 @@ type Channel struct {
 	Type               int     `json:"type" gorm:"default:0"`
 	Key                string  `json:"key" gorm:"not null"`
 	OpenAIOrganization *string `json:"openai_organization"`
+	TestModel          *string `json:"test_model"`
 	Status             int     `json:"status" gorm:"default:1"`
 	Name               string  `json:"name" gorm:"index"`
 	Weight             *uint   `json:"weight" gorm:"default:0"`
@@ -24,8 +26,35 @@ type Channel struct {
 	Group              string  `json:"group" gorm:"type:varchar(64);default:'default'"`
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:varchar(1024);default:''"`
-	Priority           *int64  `json:"priority" gorm:"bigint;default:0"`
-	AutoBan            *int    `json:"auto_ban" gorm:"default:1"`
+	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
+	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
+	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
+	AutoBan           *int    `json:"auto_ban" gorm:"default:1"`
+	OtherInfo         string  `json:"other_info"`
+}
+
+func (channel *Channel) GetOtherInfo() map[string]interface{} {
+	otherInfo := make(map[string]interface{})
+	if channel.OtherInfo != "" {
+		err := json.Unmarshal([]byte(channel.OtherInfo), &otherInfo)
+		if err != nil {
+			common.SysError("failed to unmarshal other info: " + err.Error())
+		}
+	}
+	return otherInfo
+}
+
+func (channel *Channel) SetOtherInfo(otherInfo map[string]interface{}) {
+	otherInfoBytes, err := json.Marshal(otherInfo)
+	if err != nil {
+		common.SysError("failed to marshal other info: " + err.Error())
+		return
+	}
+	channel.OtherInfo = string(otherInfoBytes)
+}
+
+func (channel *Channel) Save() error {
+	return DB.Save(channel).Error
 }
 
 func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool) ([]*Channel, error) {
@@ -152,6 +181,13 @@ func (channel *Channel) GetModelMapping() string {
 	return *channel.ModelMapping
 }
 
+func (channel *Channel) GetStatusCodeMapping() string {
+	if channel.StatusCodeMapping == nil {
+		return ""
+	}
+	return *channel.StatusCodeMapping
+}
+
 func (channel *Channel) Insert() error {
 	var err error
 	err = DB.Create(channel).Error
@@ -203,15 +239,31 @@ func (channel *Channel) Delete() error {
 	return err
 }
 
-func UpdateChannelStatusById(id int, status int) {
+func UpdateChannelStatusById(id int, status int, reason string) {
 	err := UpdateAbilityStatus(id, status == common.ChannelStatusEnabled)
 	if err != nil {
 		common.SysError("failed to update ability status: " + err.Error())
 	}
-	err = DB.Model(&Channel{}).Where("id = ?", id).Update("status", status).Error
+	channel, err := GetChannelById(id, true)
 	if err != nil {
-		common.SysError("failed to update channel status: " + err.Error())
+		// find channel by id error, directly update status
+		err = DB.Model(&Channel{}).Where("id = ?", id).Update("status", status).Error
+		if err != nil {
+			common.SysError("failed to update channel status: " + err.Error())
+		}
+	} else {
+		// find channel by id success, update status and other info
+		info := channel.GetOtherInfo()
+		info["status_reason"] = reason
+		info["status_time"] = common.GetTimestamp()
+		channel.SetOtherInfo(info)
+		channel.Status = status
+		err = channel.Save()
+		if err != nil {
+			common.SysError("failed to update channel status: " + err.Error())
+		}
 	}
+
 }
 
 func UpdateChannelUsedQuota(id int, quota int) {

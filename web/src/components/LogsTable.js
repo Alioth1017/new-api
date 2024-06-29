@@ -19,10 +19,17 @@ import {
   Spin,
   Table,
   Tag,
+  Tooltip,
 } from '@douyinfe/semi-ui';
 import { ITEMS_PER_PAGE } from '../constants';
-import { renderNumber, renderQuota, stringToColor } from '../helpers/render';
+import {
+  renderModelPrice,
+  renderNumber,
+  renderQuota,
+  stringToColor,
+} from '../helpers/render';
 import Paragraph from '@douyinfe/semi-ui/lib/es/typography/paragraph';
+import {getLogOther} from "../helpers/other.js";
 
 const { Header } = Layout;
 
@@ -135,6 +142,33 @@ function renderUseTime(type) {
   }
 }
 
+function renderFirstUseTime(type) {
+  let time = parseFloat(type) / 1000.0;
+  time = time.toFixed(1)
+  if (time < 3) {
+    return (
+        <Tag color='green' size='large'>
+          {' '}
+          {time} s{' '}
+        </Tag>
+    );
+  } else if (time < 10) {
+    return (
+        <Tag color='orange' size='large'>
+          {' '}
+          {time} s{' '}
+        </Tag>
+    );
+  } else {
+    return (
+        <Tag color='red' size='large'>
+          {' '}
+          {time} s{' '}
+        </Tag>
+    );
+  }
+}
+
 const LogsTable = () => {
   const columns = [
     {
@@ -241,17 +275,30 @@ const LogsTable = () => {
       },
     },
     {
-      title: '用时',
+      title: '用时/首字',
       dataIndex: 'use_time',
       render: (text, record, index) => {
-        return (
-          <div>
-            <Space>
-              {renderUseTime(text)}
-              {renderIsStream(record.is_stream)}
-            </Space>
-          </div>
-        );
+        if (record.is_stream) {
+          let other = getLogOther(record.other);
+          return (
+              <div>
+                <Space>
+                  {renderUseTime(text)}
+                  {renderFirstUseTime(other.frt)}
+                  {renderIsStream(record.is_stream)}
+                </Space>
+              </div>
+          );
+        } else {
+          return (
+              <div>
+                <Space>
+                  {renderUseTime(text)}
+                  {renderIsStream(record.is_stream)}
+                </Space>
+              </div>
+          );
+        }
       },
     },
     {
@@ -289,19 +336,72 @@ const LogsTable = () => {
       },
     },
     {
+      title: '重试',
+      dataIndex: 'retry',
+      className: isAdmin() ? 'tableShow' : 'tableHiddle',
+      render: (text, record, index) => {
+        let content = '渠道：' + record.channel;
+        if (record.other !== '') {
+          let other = JSON.parse(record.other);
+          if (other === null) {
+            return <></>
+          }
+          if (other.admin_info !== undefined) {
+            if (
+              other.admin_info.use_channel !== null &&
+              other.admin_info.use_channel !== undefined &&
+              other.admin_info.use_channel !== ''
+            ) {
+              // channel id array
+              let useChannel = other.admin_info.use_channel;
+              let useChannelStr = useChannel.join('->');
+              content = `渠道：${useChannelStr}`;
+            }
+          }
+        }
+        return isAdminUser ? <div>{content}</div> : <></>;
+      },
+    },
+    {
       title: '详情',
       dataIndex: 'content',
       render: (text, record, index) => {
+        let other = getLogOther(record.other);
+        if (other == null) {
+          return (
+            <Paragraph
+              ellipsis={{
+                rows: 2,
+                showTooltip: {
+                  type: 'popover',
+                  opts: { style: { width: 240 } },
+                },
+              }}
+              style={{ maxWidth: 240 }}
+            >
+              {text}
+            </Paragraph>
+          );
+        }
+        let content = renderModelPrice(
+          record.prompt_tokens,
+          record.completion_tokens,
+          other.model_ratio,
+          other.model_price,
+          other.completion_ratio,
+          other.group_ratio,
+        );
         return (
-          <Paragraph
-            ellipsis={{
-              rows: 2,
-              showTooltip: { type: 'popover', opts: { style: { width: 240 } } },
-            }}
-            style={{ maxWidth: 240 }}
-          >
-            {text}
-          </Paragraph>
+          <Tooltip content={content}>
+            <Paragraph
+              ellipsis={{
+                rows: 2,
+              }}
+              style={{ maxWidth: 240 }}
+            >
+              {text}
+            </Paragraph>
+          </Tooltip>
         );
       },
     },
@@ -471,10 +571,10 @@ const LogsTable = () => {
       });
   };
 
-  const refresh = async (localLogType) => {
+  const refresh = async () => {
     // setLoading(true);
     setActivePage(1);
-    await loadLogs(0, pageSize, localLogType);
+    await loadLogs(0, pageSize, logType);
   };
 
   const copyText = async (text) => {
@@ -635,7 +735,7 @@ const LogsTable = () => {
           style={{ width: 120 }}
           onChange={(value) => {
             setLogType(parseInt(value));
-            refresh(parseInt(value)).then();
+            loadLogs(0, pageSize, parseInt(value));
           }}
         >
           <Select.Option value='0'>全部</Select.Option>

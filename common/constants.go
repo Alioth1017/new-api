@@ -9,19 +9,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// Pay Settings
-
-var PayAddress = ""
-var CustomCallbackAddress = ""
-var EpayId = ""
-var EpayKey = ""
-var Price = 7.3
-var MinTopUp = 1
-
 var StartTime = time.Now().Unix() // unit: second
 var Version = "v0.0.0"            // this hard coding will be replaced automatically when building, no need to manually change
 var SystemName = "New API"
-var ServerAddress = "http://localhost:3000"
 var Footer = ""
 var Logo = ""
 var TopUpLink = ""
@@ -31,6 +21,7 @@ var QuotaPerUnit = 500 * 1000.0 // $0.002 / 1K tokens
 var DisplayInCurrencyEnabled = true
 var DisplayTokenStatEnabled = true
 var DrawingEnabled = true
+var TaskEnabled = true
 var DataExportEnabled = true
 var DataExportInterval = 5         // unit: minute
 var DataExportDefaultTime = "hour" // unit: minute
@@ -55,7 +46,8 @@ var TelegramOAuthEnabled = false
 var TurnstileCheckEnabled = false
 var RegisterEnabled = true
 
-var EmailDomainRestrictionEnabled = false
+var EmailDomainRestrictionEnabled = false // 是否启用邮箱域名限制
+var EmailAliasRestrictionEnabled = false  // 是否启用邮箱别名限制
 var EmailDomainWhitelist = []string{
 	"gmail.com",
 	"163.com",
@@ -75,6 +67,7 @@ var LogConsumeEnabled = true
 
 var SMTPServer = ""
 var SMTPPort = 587
+var SMTPSSLEnabled = false
 var SMTPAccount = ""
 var SMTPFrom = ""
 var SMTPToken = ""
@@ -110,14 +103,14 @@ var IsMasterNode = os.Getenv("NODE_TYPE") != "slave"
 var requestInterval, _ = strconv.Atoi(os.Getenv("POLLING_INTERVAL"))
 var RequestInterval = time.Duration(requestInterval) * time.Second
 
-var SyncFrequency = GetOrDefault("SYNC_FREQUENCY", 10*60) // unit is second
+var SyncFrequency = GetEnvOrDefault("SYNC_FREQUENCY", 60) // unit is second
 
 var BatchUpdateEnabled = false
-var BatchUpdateInterval = GetOrDefault("BATCH_UPDATE_INTERVAL", 5)
+var BatchUpdateInterval = GetEnvOrDefault("BATCH_UPDATE_INTERVAL", 5)
 
-var RelayTimeout = GetOrDefault("RELAY_TIMEOUT", 0) // unit is second
+var RelayTimeout = GetEnvOrDefault("RELAY_TIMEOUT", 0) // unit is second
 
-var GeminiSafetySetting = GetOrDefaultString("GEMINI_SAFETY_SETTING", "BLOCK_NONE")
+var GeminiSafetySetting = GetEnvOrDefaultString("GEMINI_SAFETY_SETTING", "BLOCK_NONE")
 
 const (
 	RequestIdKey = "X-Oneapi-Request-Id"
@@ -140,10 +133,10 @@ var (
 // All duration's unit is seconds
 // Shouldn't larger then RateLimitKeyExpirationDuration
 var (
-	GlobalApiRateLimitNum            = GetOrDefault("GLOBAL_API_RATE_LIMIT", 180)
+	GlobalApiRateLimitNum            = GetEnvOrDefault("GLOBAL_API_RATE_LIMIT", 180)
 	GlobalApiRateLimitDuration int64 = 3 * 60
 
-	GlobalWebRateLimitNum            = GetOrDefault("GLOBAL_WEB_RATE_LIMIT", 60)
+	GlobalWebRateLimitNum            = GetEnvOrDefault("GLOBAL_WEB_RATE_LIMIT", 60)
 	GlobalWebRateLimitDuration int64 = 3 * 60
 
 	UploadRateLimitNum            = 10
@@ -213,6 +206,13 @@ const (
 	ChannelTypeZhipu_v4       = 26
 	ChannelTypePerplexity     = 27
 	ChannelTypeLingYiWanWu    = 31
+	ChannelTypeAws            = 33
+	ChannelTypeCohere         = 34
+	ChannelTypeMiniMax        = 35
+	ChannelTypeSunoAPI        = 36
+
+	ChannelTypeDummy // this one is only for count, do not add any channel after this
+
 )
 
 var ChannelBaseURLs = []string{
@@ -248,4 +248,9 @@ var ChannelBaseURLs = []string{
 	"",                                          //29
 	"",                                          //30
 	"https://api.lingyiwanwu.com",               //31
+	"",                                          //32
+	"",                                          //33
+	"https://api.cohere.ai",                     //34
+	"https://api.minimax.chat",                  //35
+	"",                                          //36
 }

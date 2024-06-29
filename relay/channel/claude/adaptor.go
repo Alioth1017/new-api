@@ -53,9 +53,9 @@ func (a *Adaptor) ConvertRequest(c *gin.Context, relayMode int, request *dto.Gen
 		return nil, errors.New("request is nil")
 	}
 	if a.RequestMode == RequestModeCompletion {
-		return requestOpenAI2ClaudeComplete(*request), nil
+		return RequestOpenAI2ClaudeComplete(*request), nil
 	} else {
-		return requestOpenAI2ClaudeMessage(*request)
+		return RequestOpenAI2ClaudeMessage(*request)
 	}
 }
 
@@ -63,9 +63,9 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 	return channel.DoApiRequest(a, c, info, requestBody)
 }
 
-func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage *dto.Usage, err *dto.OpenAIErrorWithStatusCode, sensitiveResp *dto.SensitiveResponse) {
+func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage *dto.Usage, err *dto.OpenAIErrorWithStatusCode) {
 	if info.IsStream {
-		err, usage = claudeStreamHandler(a.RequestMode, info.UpstreamModelName, info.PromptTokens, c, resp)
+		err, usage = claudeStreamHandler(c, resp, info, a.RequestMode)
 	} else {
 		err, usage = claudeHandler(a.RequestMode, c, resp, info.PromptTokens, info.UpstreamModelName)
 	}

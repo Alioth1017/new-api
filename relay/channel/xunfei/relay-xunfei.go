@@ -87,7 +87,7 @@ func streamResponseXunfei2OpenAI(xunfeiResponse *XunfeiChatResponse) *dto.ChatCo
 		}
 	}
 	var choice dto.ChatCompletionsStreamResponseChoice
-	choice.Delta.Content = xunfeiResponse.Payload.Choices.Text[0].Content
+	choice.Delta.SetContentString(xunfeiResponse.Payload.Choices.Text[0].Content)
 	if xunfeiResponse.Payload.Choices.Status == 2 {
 		choice.FinishReason = &relaycommon.StopFinishReason
 	}
@@ -179,7 +179,13 @@ func xunfeiHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId s
 		case stop = <-stopChan:
 		}
 	}
-
+	if len(xunfeiResponse.Payload.Choices.Text) == 0 {
+		xunfeiResponse.Payload.Choices.Text = []XunfeiChatResponseTextItem{
+			{
+				Content: "",
+			},
+		}
+	}
 	xunfeiResponse.Payload.Choices.Text[0].Content = content
 
 	response := responseXunfei2OpenAI(&xunfeiResponse)
@@ -246,6 +252,8 @@ func apiVersion2domain(apiVersion string) string {
 		return "generalv3"
 	case "v3.5":
 		return "generalv3.5"
+	case "v4.0":
+		return "4.0Ultra"
 	}
 	return "general" + apiVersion
 }

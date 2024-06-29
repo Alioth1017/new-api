@@ -10,6 +10,8 @@ import {
 } from 'semantic-ui-react';
 import { API, removeTrailingSlash, showError, verifyJSON } from '../helpers';
 
+import { useTheme } from '../context/Theme';
+
 const SystemSetting = () => {
   let [inputs, setInputs] = useState({
     PasswordLoginEnabled: '',
@@ -25,6 +27,8 @@ const SystemSetting = () => {
     SMTPFrom: '',
     SMTPToken: '',
     ServerAddress: '',
+    WorkerUrl: '',
+    WorkerValidKey: '',
     EpayId: '',
     EpayKey: '',
     Price: 7.3,
@@ -42,6 +46,8 @@ const SystemSetting = () => {
     TurnstileSecretKey: '',
     RegisterEnabled: '',
     EmailDomainRestrictionEnabled: '',
+    EmailAliasRestrictionEnabled: '',
+    SMTPSSLEnabled: '',
     EmailDomainWhitelist: [],
     // telegram login
     TelegramOAuthEnabled: '',
@@ -54,6 +60,9 @@ const SystemSetting = () => {
   const [restrictedDomainInput, setRestrictedDomainInput] = useState('');
   const [showPasswordWarningModal, setShowPasswordWarningModal] =
     useState(false);
+
+  const theme = useTheme();
+  const isDark = theme === 'dark';
 
   const getOptions = async () => {
     const res = await API.get('/api/option/');
@@ -98,6 +107,8 @@ const SystemSetting = () => {
       case 'TelegramOAuthEnabled':
       case 'TurnstileCheckEnabled':
       case 'EmailDomainRestrictionEnabled':
+      case 'EmailAliasRestrictionEnabled':
+      case 'SMTPSSLEnabled':
       case 'RegisterEnabled':
         value = inputs[key] === 'true' ? 'false' : 'true';
         break;
@@ -134,8 +145,10 @@ const SystemSetting = () => {
     }
     if (
       name === 'Notice' ||
-      name.startsWith('SMTP') ||
+      (name.startsWith('SMTP') && name !== 'SMTPSSLEnabled') ||
       name === 'ServerAddress' ||
+      name === 'WorkerUrl' ||
+      name === 'WorkerValidKey' ||
       name === 'EpayId' ||
       name === 'EpayKey' ||
       name === 'Price' ||
@@ -163,6 +176,14 @@ const SystemSetting = () => {
     await updateOption('ServerAddress', ServerAddress);
   };
 
+  const submitWorker = async () => {
+    let WorkerUrl = removeTrailingSlash(inputs.WorkerUrl);
+    await updateOption('WorkerUrl', WorkerUrl);
+    if (inputs.WorkerValidKey !== '') {
+      await updateOption('WorkerValidKey', inputs.WorkerValidKey);
+    }
+  }
+
   const submitPayAddress = async () => {
     if (inputs.ServerAddress === '') {
       showError('请先填写服务器地址');
@@ -180,7 +201,7 @@ const SystemSetting = () => {
     if (inputs.EpayId !== '') {
       await updateOption('EpayId', inputs.EpayId);
     }
-    if (inputs.EpayKey !== '') {
+    if (inputs.EpayKey !== undefined && inputs.EpayKey !== '') {
       await updateOption('EpayKey', inputs.EpayKey);
     }
     await updateOption('Price', '' + inputs.Price);
@@ -302,8 +323,10 @@ const SystemSetting = () => {
   return (
     <Grid columns={1}>
       <Grid.Column>
-        <Form loading={loading}>
-          <Header as='h3'>通用设置</Header>
+        <Form loading={loading} inverted={isDark}>
+          <Header as='h3' inverted={isDark}>
+            通用设置
+          </Header>
           <Form.Group widths='equal'>
             <Form.Input
               label='服务器地址'
@@ -316,8 +339,30 @@ const SystemSetting = () => {
           <Form.Button onClick={submitServerAddress}>
             更新服务器地址
           </Form.Button>
+          <Header as='h3' inverted={isDark}>
+            代理设置（支持 <a href='https://github.com/Calcium-Ion/new-api-worker' target='_blank' rel='noreferrer'>new-api-worker</a>）
+          </Header>
+          <Form.Group widths='equal'>
+            <Form.Input
+              label='Worker地址，不填写则不启用代理'
+              placeholder='例如：https://workername.yourdomain.workers.dev'
+              value={inputs.WorkerUrl}
+              name='WorkerUrl'
+              onChange={handleInputChange}
+            />
+            <Form.Input
+              label='Worker密钥，根据你部署的 Worker 填写'
+              placeholder='例如：your_secret_key'
+              value={inputs.WorkerValidKey}
+              name='WorkerValidKey'
+              onChange={handleInputChange}
+            />
+          </Form.Group>
+          <Form.Button onClick={submitWorker}>
+            更新Worker设置
+          </Form.Button>
           <Divider />
-          <Header as='h3'>
+          <Header as='h3' inverted={isDark}>
             支付设置（当前仅支持易支付接口，默认使用上方服务器地址作为回调地址！）
           </Header>
           <Form.Group widths='equal'>
@@ -337,7 +382,7 @@ const SystemSetting = () => {
             />
             <Form.Input
               label='易支付商户密钥'
-              placeholder='例如：dejhfueqhujasjmndbjkqaw'
+              placeholder='敏感信息不会发送到前端显示'
               value={inputs.EpayKey}
               name='EpayKey'
               onChange={handleInputChange}
@@ -360,7 +405,7 @@ const SystemSetting = () => {
               onChange={handleInputChange}
             />
             <Form.Input
-              label='最低充值数量'
+              label='最低充值美元数量（以美金为单位，如果使用额度请自行换算！）'
               placeholder='例如：2，就是最低充值2$'
               value={inputs.MinTopUp}
               name='MinTopUp'
@@ -381,7 +426,9 @@ const SystemSetting = () => {
           </Form.Group>
           <Form.Button onClick={submitPayAddress}>更新支付设置</Form.Button>
           <Divider />
-          <Header as='h3'>配置登录注册</Header>
+          <Header as='h3' inverted={isDark}>
+            配置登录注册
+          </Header>
           <Form.Group inline>
             <Form.Checkbox
               checked={inputs.PasswordLoginEnabled === 'true'}
@@ -464,7 +511,7 @@ const SystemSetting = () => {
             />
           </Form.Group>
           <Divider />
-          <Header as='h3'>
+          <Header as='h3' inverted={isDark}>
             配置邮箱域名白名单
             <Header.Subheader>
               用以防止恶意用户利用临时邮箱批量注册
@@ -476,6 +523,14 @@ const SystemSetting = () => {
               name='EmailDomainRestrictionEnabled'
               onChange={handleInputChange}
               checked={inputs.EmailDomainRestrictionEnabled === 'true'}
+            />
+          </Form.Group>
+          <Form.Group widths={3}>
+            <Form.Checkbox
+              label='启用邮箱别名限制（例如：ab.cd@gmail.com）'
+              name='EmailAliasRestrictionEnabled'
+              onChange={handleInputChange}
+              checked={inputs.EmailAliasRestrictionEnabled === 'true'}
             />
           </Form.Group>
           <Form.Group widths={2}>
@@ -521,7 +576,7 @@ const SystemSetting = () => {
             保存邮箱域名白名单设置
           </Form.Button>
           <Divider />
-          <Header as='h3'>
+          <Header as='h3' inverted={isDark}>
             配置 SMTP
             <Header.Subheader>用以支持系统的邮件发送</Header.Subheader>
           </Header>
@@ -570,9 +625,17 @@ const SystemSetting = () => {
               placeholder='敏感信息不会发送到前端显示'
             />
           </Form.Group>
+          <Form.Group widths={3}>
+            <Form.Checkbox
+              label='启用SMTP SSL（465端口强制开启）'
+              name='SMTPSSLEnabled'
+              onChange={handleInputChange}
+              checked={inputs.SMTPSSLEnabled === 'true'}
+            />
+          </Form.Group>
           <Form.Button onClick={submitSMTP}>保存 SMTP 设置</Form.Button>
           <Divider />
-          <Header as='h3'>
+          <Header as='h3' inverted={isDark}>
             配置 GitHub OAuth App
             <Header.Subheader>
               用以支持通过 GitHub 进行登录注册，
@@ -614,7 +677,7 @@ const SystemSetting = () => {
             保存 GitHub OAuth 设置
           </Form.Button>
           <Divider />
-          <Header as='h3'>
+          <Header as='h3' inverted={isDark}>
             配置 WeChat Server
             <Header.Subheader>
               用以支持通过微信进行登录注册，
@@ -659,7 +722,9 @@ const SystemSetting = () => {
             保存 WeChat Server 设置
           </Form.Button>
           <Divider />
-          <Header as='h3'>配置 Telegram 登录</Header>
+          <Header as='h3' inverted={isDark}>
+            配置 Telegram 登录
+          </Header>
           <Form.Group inline>
             <Form.Input
               label='Telegram Bot Token'
@@ -680,7 +745,7 @@ const SystemSetting = () => {
             保存 Telegram 登录设置
           </Form.Button>
           <Divider />
-          <Header as='h3'>
+          <Header as='h3' inverted={isDark}>
             配置 Turnstile
             <Header.Subheader>
               用以支持用户校验，

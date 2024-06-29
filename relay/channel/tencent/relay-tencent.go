@@ -54,6 +54,7 @@ func requestOpenAI2Tencent(request dto.GeneralOpenAIRequest) *TencentChatRequest
 		TopP:        request.TopP,
 		Stream:      stream,
 		Messages:    messages,
+		Model:       request.Model,
 	}
 }
 
@@ -86,7 +87,7 @@ func streamResponseTencent2OpenAI(TencentResponse *TencentChatResponse) *dto.Cha
 	}
 	if len(TencentResponse.Choices) > 0 {
 		var choice dto.ChatCompletionsStreamResponseChoice
-		choice.Delta.Content = TencentResponse.Choices[0].Delta.Content
+		choice.Delta.SetContentString(TencentResponse.Choices[0].Delta.Content)
 		if TencentResponse.Choices[0].FinishReason == "stop" {
 			choice.FinishReason = &relaycommon.StopFinishReason
 		}
@@ -138,7 +139,7 @@ func tencentStreamHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIError
 			}
 			response := streamResponseTencent2OpenAI(&TencentResponse)
 			if len(response.Choices) != 0 {
-				responseText += response.Choices[0].Delta.Content
+				responseText += response.Choices[0].Delta.GetContentString()
 			}
 			jsonResponse, err := json.Marshal(response)
 			if err != nil {

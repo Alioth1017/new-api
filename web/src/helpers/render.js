@@ -1,4 +1,3 @@
-import { Label } from 'semantic-ui-react';
 import { Tag } from '@douyinfe/semi-ui';
 
 export function renderText(text, limit) {
@@ -8,39 +7,41 @@ export function renderText(text, limit) {
   return text;
 }
 
+/**
+ * Render group tags based on the input group string
+ * @param {string} group - The input group string
+ * @returns {JSX.Element} - The rendered group tags
+ */
 export function renderGroup(group) {
   if (group === '') {
-    return <Tag size='large'>default</Tag>;
+    return (
+      <Tag size='large' key='default'>
+        unknown
+      </Tag>
+    );
   }
-  let groups = group.split(',');
-  groups.sort();
+
+  const tagColors = {
+    vip: 'yellow',
+    pro: 'yellow',
+    svip: 'red',
+    premium: 'red',
+  };
+
+  const groups = group.split(',').sort();
+
   return (
-    <>
-      {groups.map((group) => {
-        if (group === 'vip' || group === 'pro') {
-          return (
-            <Tag size='large' color='yellow'>
-              {group}
-            </Tag>
-          );
-        } else if (group === 'svip' || group === 'premium') {
-          return (
-            <Tag size='large' color='red'>
-              {group}
-            </Tag>
-          );
-        }
-        if (group === 'default') {
-          return <Tag size='large'>{group}</Tag>;
-        } else {
-          return (
-            <Tag size='large' color={stringToColor(group)}>
-              {group}
-            </Tag>
-          );
-        }
-      })}
-    </>
+    <span key={group}>
+      {groups.map((group) => (
+        <Tag
+          size='large'
+          color={tagColors[group] || stringToColor(group)}
+          key={group}
+        >
+          {group}
+        </Tag>
+      ))}
+    </span>
   );
 }
 
@@ -99,10 +100,27 @@ export function getQuotaPerUnit() {
   return quotaPerUnit;
 }
 
+export function renderUnitWithQuota(quota) {
+  let quotaPerUnit = localStorage.getItem('quota_per_unit');
+  quotaPerUnit = parseFloat(quotaPerUnit);
+  quota = parseFloat(quota);
+  return quotaPerUnit * quota;
+}
+
 export function getQuotaWithUnit(quota, digits = 6) {
   let quotaPerUnit = localStorage.getItem('quota_per_unit');
   quotaPerUnit = parseFloat(quotaPerUnit);
   return (quota / quotaPerUnit).toFixed(digits);
+}
+
+export function renderQuotaWithAmount(amount) {
+  let displayInCurrency = localStorage.getItem('display_in_currency');
+  displayInCurrency = displayInCurrency === 'true';
+  if (displayInCurrency) {
+    return '$' + amount;
+  } else {
+    return renderUnitWithQuota(amount);
+  }
 }
 
 export function renderQuota(quota, digits = 2) {
@@ -114,6 +132,44 @@ export function renderQuota(quota, digits = 2) {
     return '$' + (quota / quotaPerUnit).toFixed(digits);
   }
   return renderNumber(quota);
+}
+
+export function renderModelPrice(
+  inputTokens,
+  completionTokens,
+  modelRatio,
+  modelPrice = -1,
+  completionRatio,
+  groupRatio,
+) {
+  // 1 ratio = $0.002 / 1K tokens
+  if (modelPrice !== -1) {
+    return '模型价格：$' + modelPrice * groupRatio;
+  } else {
+    if (completionRatio === undefined) {
+      completionRatio = 0;
+    }
+    // 这里的 *2 是因为 1倍率=0.002刀，请勿删除
+    let inputRatioPrice = modelRatio * 2.0 * groupRatio;
+    let completionRatioPrice = modelRatio * 2.0 * completionRatio * groupRatio;
+    let price =
+      (inputTokens / 1000000) * inputRatioPrice +
+      (completionTokens / 1000000) * completionRatioPrice;
+    return (
+      <>
+        <article>
+          <p>提示 ${inputRatioPrice} / 1M tokens</p>
+          <p>补全 ${completionRatioPrice} / 1M tokens</p>
+          <p></p>
+          <p>
+            提示 {inputTokens} tokens / 1M tokens * ${inputRatioPrice} + 补全{' '}
+            {completionTokens} tokens / 1M tokens * ${completionRatioPrice} = $
+            {price.toFixed(6)}
+          </p>
+        </article>
+      </>
+    );
+  }
 }
 
 export function renderQuotaWithPrompt(quota, digits) {
@@ -145,24 +201,23 @@ const colors = [
 
 export const modelColorMap = {
   'dall-e': 'rgb(147,112,219)', // 深紫色
-  'dall-e-2': 'rgb(147,112,219)', // 介于紫色和蓝色之间的色调
+  // 'dall-e-2': 'rgb(147,112,219)', // 介于紫色和蓝色之间的色调
   'dall-e-3': 'rgb(153,50,204)', // 介于紫罗兰和洋红之间的色调
-  midjourney: 'rgb(136,43,180)', // 介于紫罗兰和洋红之间的色调
   'gpt-3.5-turbo': 'rgb(184,227,167)', // 浅绿色
-  'gpt-3.5-turbo-0301': 'rgb(131,220,131)', // 亮绿色
+  // 'gpt-3.5-turbo-0301': 'rgb(131,220,131)', // 亮绿色
   'gpt-3.5-turbo-0613': 'rgb(60,179,113)', // 海洋绿
   'gpt-3.5-turbo-1106': 'rgb(32,178,170)', // 浅海洋绿
-  'gpt-3.5-turbo-16k': 'rgb(252,200,149)', // 淡橙色
-  'gpt-3.5-turbo-16k-0613': 'rgb(255,181,119)', // 淡桃色
+  'gpt-3.5-turbo-16k': 'rgb(149,252,206)', // 淡橙色
+  'gpt-3.5-turbo-16k-0613': 'rgb(119,255,214)', // 淡桃色
   'gpt-3.5-turbo-instruct': 'rgb(175,238,238)', // 粉蓝色
   'gpt-4': 'rgb(135,206,235)', // 天蓝色
-  'gpt-4-0314': 'rgb(70,130,180)', // 钢蓝色
+  // 'gpt-4-0314': 'rgb(70,130,180)', // 钢蓝色
   'gpt-4-0613': 'rgb(100,149,237)', // 矢车菊蓝
   'gpt-4-1106-preview': 'rgb(30,144,255)', // 道奇蓝
   'gpt-4-0125-preview': 'rgb(2,177,236)', // 深天蓝
   'gpt-4-turbo-preview': 'rgb(2,177,255)', // 深天蓝
   'gpt-4-32k': 'rgb(104,111,238)', // 中紫色
-  'gpt-4-32k-0314': 'rgb(90,105,205)', // 暗灰蓝色
+  // 'gpt-4-32k-0314': 'rgb(90,105,205)', // 暗灰蓝色
   'gpt-4-32k-0613': 'rgb(61,71,139)', // 暗蓝灰色
   'gpt-4-all': 'rgb(65,105,225)', // 皇家蓝
   'gpt-4-gizmo-*': 'rgb(0,0,255)', // 纯蓝色
@@ -170,7 +225,7 @@ export const modelColorMap = {
   'text-ada-001': 'rgb(255,192,203)', // 粉红色
   'text-babbage-001': 'rgb(255,160,122)', // 浅珊瑚色
   'text-curie-001': 'rgb(219,112,147)', // 苍紫罗兰色
-  'text-davinci-002': 'rgb(199,21,133)', // 中紫罗兰红色
+  // 'text-davinci-002': 'rgb(199,21,133)', // 中紫罗兰红色
   'text-davinci-003': 'rgb(219,112,147)', // 苍紫罗兰色（与Curie相同，表示同一个系列）
   'text-davinci-edit-001': 'rgb(255,105,180)', // 热粉色
   'text-embedding-ada-002': 'rgb(255,182,193)', // 浅粉红
@@ -182,6 +237,10 @@ export const modelColorMap = {
   'tts-1-hd': 'rgb(255,215,0)', // 金色
   'tts-1-hd-1106': 'rgb(255,223,0)', // 金黄色（略有区别）
   'whisper-1': 'rgb(245,245,220)', // 米色
+  'claude-3-opus-20240229': 'rgb(255,132,31)', // 橙红色
+  'claude-3-sonnet-20240229': 'rgb(253,135,93)', // 橙色
+  'claude-3-haiku-20240307': 'rgb(255,175,146)', // 浅橙色
+  'claude-2.1': 'rgb(255,209,190)', // 浅橙色（略有区别）
 };
 
 export function stringToColor(str) {

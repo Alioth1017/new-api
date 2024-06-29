@@ -45,9 +45,9 @@ func GetStatus(c *gin.Context) {
 			"footer_html":              common.Footer,
 			"wechat_qrcode":            common.WeChatAccountQRCodeImageURL,
 			"wechat_login":             common.WeChatAuthEnabled,
-			"server_address":           common.ServerAddress,
-			"price":                    common.Price,
-			"min_topup":                common.MinTopUp,
+			"server_address":           constant.ServerAddress,
+			"price":                    constant.Price,
+			"min_topup":                constant.MinTopUp,
 			"turnstile_check":          common.TurnstileCheckEnabled,
 			"turnstile_site_key":       common.TurnstileSiteKey,
 			"top_up_link":              common.TopUpLink,
@@ -57,10 +57,11 @@ func GetStatus(c *gin.Context) {
 			"display_in_currency":      common.DisplayInCurrencyEnabled,
 			"enable_batch_update":      common.BatchUpdateEnabled,
 			"enable_drawing":           common.DrawingEnabled,
+			"enable_task":              common.TaskEnabled,
 			"enable_data_export":       common.DataExportEnabled,
 			"data_export_default_time": common.DataExportDefaultTime,
 			"default_collapse_sidebar": common.DefaultCollapseSidebar,
-			"enable_online_topup":      common.PayAddress != "" && common.EpayId != "" && common.EpayKey != "",
+			"enable_online_topup":      constant.PayAddress != "" && constant.EpayId != "" && constant.EpayKey != "",
 			"mj_notify_enabled":        constant.MjNotifyEnabled,
 		},
 	})
@@ -120,10 +121,20 @@ func SendEmailVerification(c *gin.Context) {
 		})
 		return
 	}
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "无效的邮箱地址",
+		})
+		return
+	}
+	localPart := parts[0]
+	domainPart := parts[1]
 	if common.EmailDomainRestrictionEnabled {
 		allowed := false
 		for _, domain := range common.EmailDomainWhitelist {
-			if strings.HasSuffix(email, "@"+domain) {
+			if domainPart == domain {
 				allowed = true
 				break
 			}
@@ -131,11 +142,22 @@ func SendEmailVerification(c *gin.Context) {
 		if !allowed {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "管理员启用了邮箱域名白名单，您的邮箱地址的域名不在白名单中",
+				"message": "The administrator has enabled the email domain name whitelist, and your email address is not allowed due to special symbols or it's not in the whitelist.",
 			})
 			return
 		}
 	}
+	if common.EmailAliasRestrictionEnabled {
+		containsSpecialSymbols := strings.Contains(localPart, "+") || strings.Contains(localPart, ".")
+		if containsSpecialSymbols {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "管理员已启用邮箱地址别名限制，您的邮箱地址由于包含特殊符号而被拒绝。",
+			})
+			return
+		}
+	}
+
 	if model.IsEmailAlreadyTaken(email) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -182,7 +204,7 @@ func SendPasswordResetEmail(c *gin.Context) {
 	}
 	code := common.GenerateVerificationCode(0)
 	common.RegisterVerificationCodeWithKey(email, code, common.PasswordResetPurpose)
-	link := fmt.Sprintf("%s/user/reset?email=%s&token=%s", common.ServerAddress, email, code)
+	link := fmt.Sprintf("%s/user/reset?email=%s&token=%s", constant.ServerAddress, email, code)
 	subject := fmt.Sprintf("%s密码重置", common.SystemName)
 	content := fmt.Sprintf("<p>您好，你正在进行%s密码重置。</p>"+
 		"<p>点击 <a href='%s'>此处</a> 进行密码重置。</p>"+

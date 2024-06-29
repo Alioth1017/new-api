@@ -1,6 +1,9 @@
 package constant
 
-import "strings"
+import (
+	"net/http"
+	"strings"
+)
 
 const (
 	RelayModeUnknown = iota
@@ -26,6 +29,9 @@ const (
 	RelayModeMidjourneyModal
 	RelayModeMidjourneyShorten
 	RelayModeSwapFace
+	RelayModeSunoFetch
+	RelayModeSunoFetchByID
+	RelayModeSunoSubmit
 )
 
 func Path2RelayMode(path string) int {
@@ -56,29 +62,29 @@ func Path2RelayMode(path string) int {
 
 func Path2RelayModeMidjourney(path string) int {
 	relayMode := RelayModeUnknown
-	if strings.HasPrefix(path, "/mj/submit/action") {
+	if strings.HasSuffix(path, "/mj/submit/action") {
 		// midjourney plus
 		relayMode = RelayModeMidjourneyAction
-	} else if strings.HasPrefix(path, "/mj/submit/modal") {
+	} else if strings.HasSuffix(path, "/mj/submit/modal") {
 		// midjourney plus
 		relayMode = RelayModeMidjourneyModal
-	} else if strings.HasPrefix(path, "/mj/submit/shorten") {
+	} else if strings.HasSuffix(path, "/mj/submit/shorten") {
 		// midjourney plus
 		relayMode = RelayModeMidjourneyShorten
-	} else if strings.HasPrefix(path, "/mj/insight-face/swap") {
+	} else if strings.HasSuffix(path, "/mj/insight-face/swap") {
 		// midjourney plus
 		relayMode = RelayModeSwapFace
-	} else if strings.HasPrefix(path, "/mj/submit/imagine") {
+	} else if strings.HasSuffix(path, "/mj/submit/imagine") {
 		relayMode = RelayModeMidjourneyImagine
-	} else if strings.HasPrefix(path, "/mj/submit/blend") {
+	} else if strings.HasSuffix(path, "/mj/submit/blend") {
 		relayMode = RelayModeMidjourneyBlend
-	} else if strings.HasPrefix(path, "/mj/submit/describe") {
+	} else if strings.HasSuffix(path, "/mj/submit/describe") {
 		relayMode = RelayModeMidjourneyDescribe
-	} else if strings.HasPrefix(path, "/mj/notify") {
+	} else if strings.HasSuffix(path, "/mj/notify") {
 		relayMode = RelayModeMidjourneyNotify
-	} else if strings.HasPrefix(path, "/mj/submit/change") {
+	} else if strings.HasSuffix(path, "/mj/submit/change") {
 		relayMode = RelayModeMidjourneyChange
-	} else if strings.HasPrefix(path, "/mj/submit/simple-change") {
+	} else if strings.HasSuffix(path, "/mj/submit/simple-change") {
 		relayMode = RelayModeMidjourneyChange
 	} else if strings.HasSuffix(path, "/fetch") {
 		relayMode = RelayModeMidjourneyTaskFetch
@@ -86,6 +92,18 @@ func Path2RelayModeMidjourney(path string) int {
 		relayMode = RelayModeMidjourneyTaskImageSeed
 	} else if strings.HasSuffix(path, "/list-by-condition") {
 		relayMode = RelayModeMidjourneyTaskFetchByCondition
+	}
+	return relayMode
+}
+
+func Path2RelaySuno(method, path string) int {
+	relayMode := RelayModeUnknown
+	if method == http.MethodPost && strings.HasSuffix(path, "/fetch") {
+		relayMode = RelayModeSunoFetch
+	} else if method == http.MethodGet && strings.Contains(path, "/fetch/") {
+		relayMode = RelayModeSunoFetchByID
+	} else if strings.Contains(path, "/submit/") {
+		relayMode = RelayModeSunoSubmit
 	}
 	return relayMode
 }
