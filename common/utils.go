@@ -1,19 +1,26 @@
 package common
 
 import (
+	crand "crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"html/template"
+	"io"
 	"log"
+	"math/big"
 	"math/rand"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
-	"unsafe"
+
+	"github.com/google/uuid"
+	"github.com/pkg/errors"
 )
 
 func OpenBrowser(url string) {
@@ -57,6 +64,78 @@ func GetIp() (ip string) {
 		}
 	}
 	return
+}
+
+func GetNetworkIps() []string {
+	var networkIps []string
+	ips, err := net.InterfaceAddrs()
+	if err != nil {
+		log.Println(err)
+		return networkIps
+	}
+
+	for _, a := range ips {
+		if ipNet, ok := a.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ipNet.IP.To4() != nil {
+				ip := ipNet.IP.String()
+				// Include common private network ranges
+				if strings.HasPrefix(ip, "10.") ||
+					strings.HasPrefix(ip, "172.") ||
+					strings.HasPrefix(ip, "192.168.") {
+					networkIps = append(networkIps, ip)
+				}
+			}
+		}
+	}
+	return networkIps
+}
+
+// IsRunningInContainer detects if the application is running inside a container
+func IsRunningInContainer() bool {
+	// Method 1: Check for .dockerenv file (Docker containers)
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+
+	// Method 2: Check cgroup for container indicators
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		content := string(data)
+		if strings.Contains(content, "docker") ||
+			strings.Contains(content, "containerd") ||
+			strings.Contains(content, "kubepods") ||
+			strings.Contains(content, "/lxc/") {
+			return true
+		}
+	}
+
+	// Method 3: Check environment variables commonly set by container runtimes
+	containerEnvVars := []string{
+		"KUBERNETES_SERVICE_HOST",
+		"DOCKER_CONTAINER",
+		"container",
+	}
+
+	for _, envVar := range containerEnvVars {
+		if os.Getenv(envVar) != "" {
+			return true
+		}
+	}
+
+	// Method 4: Check if init process is not the traditional init
+	if data, err := os.ReadFile("/proc/1/comm"); err == nil {
+		comm := strings.TrimSpace(string(data))
+		// In containers, process 1 is often not "init" or "systemd"
+		if comm != "init" && comm != "systemd" {
+			// Additional check: if it's a common container entrypoint
+			if strings.Contains(comm, "docker") ||
+				strings.Contains(comm, "containerd") ||
+				strings.Contains(comm, "runc") {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 var sizeKB = 1024
@@ -113,9 +192,17 @@ func Interface2String(inter interface{}) string {
 	case int:
 		return fmt.Sprintf("%d", inter.(int))
 	case float64:
-		return fmt.Sprintf("%f", inter.(float64))
+		return strconv.FormatFloat(inter.(float64), 'f', -1, 64)
+	case bool:
+		if inter.(bool) {
+			return "true"
+		} else {
+			return "false"
+		}
+	case nil:
+		return ""
 	}
-	return "Not Implemented"
+	return fmt.Sprintf("%v", inter)
 }
 
 func UnescapeHTML(x string) interface{} {
@@ -138,34 +225,32 @@ func GetUUID() string {
 
 const keyChars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
+func GenerateRandomCharsKey(length int) (string, error) {
+	b := make([]byte, length)
+	maxI := big.NewInt(int64(len(keyChars)))
 
-func GenerateKey() string {
-	//rand.Seed(time.Now().UnixNano())
-	key := make([]byte, 48)
-	for i := 0; i < 16; i++ {
-		key[i] = keyChars[rand.Intn(len(keyChars))]
-	}
-	uuid_ := GetUUID()
-	for i := 0; i < 32; i++ {
-		c := uuid_[i]
-		if i%2 == 0 && c >= 'a' && c <= 'z' {
-			c = c - 'a' + 'A'
+	for i := range b {
+		n, err := crand.Int(crand.Reader, maxI)
+		if err != nil {
+			return "", err
 		}
-		key[i+16] = c
+		b[i] = keyChars[n.Int64()]
 	}
-	return string(key)
+
+	return string(b), nil
 }
 
-func GetRandomString(length int) string {
-	//rand.Seed(time.Now().UnixNano())
-	key := make([]byte, length)
-	for i := 0; i < length; i++ {
-		key[i] = keyChars[rand.Intn(len(keyChars))]
+func GenerateRandomKey(length int) (string, error) {
+	bytes := make([]byte, length*3/4) // 对于48位的输出，这里应该是36
+	if _, err := crand.Read(bytes); err != nil {
+		return "", err
 	}
-	return string(key)
+	return base64.StdEncoding.EncodeToString(bytes), nil
+}
+
+func GenerateKey() (string, error) {
+	//rand.Seed(time.Now().UnixNano())
+	return GenerateRandomCharsKey(48)
 }
 
 func GetRandomInt(max int) int {
@@ -178,7 +263,7 @@ func GetTimestamp() int64 {
 }
 
 func GetTimeString() string {
-	now := time.Now()
+	now := time.Now().UTC()
 	return fmt.Sprintf("%s%d", now.Format("20060102150405"), now.UnixNano()%1e9)
 }
 
@@ -190,49 +275,62 @@ func Max(a int, b int) int {
 	}
 }
 
-func GetOrDefault(env string, defaultValue int) int {
-	if env == "" || os.Getenv(env) == "" {
-		return defaultValue
-	}
-	num, err := strconv.Atoi(os.Getenv(env))
-	if err != nil {
-		SysError(fmt.Sprintf("failed to parse %s: %s, using default value: %d", env, err.Error(), defaultValue))
-		return defaultValue
-	}
-	return num
-}
-
-func GetOrDefaultString(env string, defaultValue string) string {
-	if env == "" || os.Getenv(env) == "" {
-		return defaultValue
-	}
-	return os.Getenv(env)
-}
-
 func MessageWithRequestId(message string, id string) string {
 	return fmt.Sprintf("%s (request id: %s)", message, id)
 }
 
-func String2Int(str string) int {
-	num, err := strconv.Atoi(str)
+func RandomSleep() {
+	// Sleep for 0-3000 ms
+	time.Sleep(time.Duration(rand.Intn(3000)) * time.Millisecond)
+}
+
+func GetPointer[T any](v T) *T {
+	return &v
+}
+
+func Any2Type[T any](data any) (T, error) {
+	var zero T
+	bytes, err := json.Marshal(data)
 	if err != nil {
-		return 0
+		return zero, err
 	}
-	return num
+	var res T
+	err = json.Unmarshal(bytes, &res)
+	if err != nil {
+		return zero, err
+	}
+	return res, nil
 }
 
-func StringsContains(strs []string, str string) bool {
-	for _, s := range strs {
-		if s == str {
-			return true
-		}
+// SaveTmpFile saves data to a temporary file. The filename would be apppended with a random string.
+func SaveTmpFile(filename string, data io.Reader) (string, error) {
+	f, err := os.CreateTemp(os.TempDir(), filename)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to create temporary file %s", filename)
 	}
-	return false
+	defer f.Close()
+
+	_, err = io.Copy(f, data)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to copy data to temporary file %s", filename)
+	}
+
+	return f.Name(), nil
 }
 
-// StringToByteSlice []byte only read, panic on append
-func StringToByteSlice(s string) []byte {
-	tmp1 := (*[2]uintptr)(unsafe.Pointer(&s))
-	tmp2 := [3]uintptr{tmp1[0], tmp1[1], tmp1[1]}
-	return *(*[]byte)(unsafe.Pointer(&tmp2))
+// BuildURL concatenates base and endpoint, returns the complete url string
+func BuildURL(base string, endpoint string) string {
+	u, err := url.Parse(base)
+	if err != nil {
+		return base + endpoint
+	}
+	end := endpoint
+	if end == "" {
+		end = "/"
+	}
+	ref, err := url.Parse(end)
+	if err != nil {
+		return base + endpoint
+	}
+	return u.ResolveReference(ref).String()
 }

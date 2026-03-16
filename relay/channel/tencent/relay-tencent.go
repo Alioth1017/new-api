@@ -3,73 +3,68 @@ package tencent
 import (
 	"bufio"
 	"crypto/hmac"
-	"crypto/sha1"
-	"encoding/base64"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
-	"one-api/common"
-	"one-api/dto"
-	relaycommon "one-api/relay/common"
-	"one-api/service"
-	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/types"
+
+	"github.com/gin-gonic/gin"
 )
 
 // https://cloud.tencent.com/document/product/1729/97732
 
-func requestOpenAI2Tencent(request dto.GeneralOpenAIRequest) *TencentChatRequest {
-	messages := make([]TencentMessage, 0, len(request.Messages))
+func requestOpenAI2Tencent(a *Adaptor, request dto.GeneralOpenAIRequest) *TencentChatRequest {
+	messages := make([]*TencentMessage, 0, len(request.Messages))
 	for i := 0; i < len(request.Messages); i++ {
 		message := request.Messages[i]
-		if message.Role == "system" {
-			messages = append(messages, TencentMessage{
-				Role:    "user",
-				Content: message.StringContent(),
-			})
-			messages = append(messages, TencentMessage{
-				Role:    "assistant",
-				Content: "Okay",
-			})
-			continue
-		}
-		messages = append(messages, TencentMessage{
+		messages = append(messages, &TencentMessage{
 			Content: message.StringContent(),
 			Role:    message.Role,
 		})
 	}
-	stream := 0
-	if request.Stream {
-		stream = 1
+	var req = TencentChatRequest{
+		Stream:   request.Stream,
+		Messages: messages,
+		Model:    &request.Model,
 	}
-	return &TencentChatRequest{
-		Timestamp:   common.GetTimestamp(),
-		Expired:     common.GetTimestamp() + 24*60*60,
-		QueryID:     common.GetUUID(),
-		Temperature: request.Temperature,
-		TopP:        request.TopP,
-		Stream:      stream,
-		Messages:    messages,
+	if request.TopP != nil {
+		req.TopP = request.TopP
 	}
+	req.Temperature = request.Temperature
+	return &req
 }
 
 func responseTencent2OpenAI(response *TencentChatResponse) *dto.OpenAITextResponse {
 	fullTextResponse := dto.OpenAITextResponse{
+		Id:      response.Id,
 		Object:  "chat.completion",
 		Created: common.GetTimestamp(),
-		Usage:   response.Usage,
+		Usage: dto.Usage{
+			PromptTokens:     response.Usage.PromptTokens,
+			CompletionTokens: response.Usage.CompletionTokens,
+			TotalTokens:      response.Usage.TotalTokens,
+		},
 	}
 	if len(response.Choices) > 0 {
-		content, _ := json.Marshal(response.Choices[0].Messages.Content)
 		choice := dto.OpenAITextResponseChoice{
 			Index: 0,
 			Message: dto.Message{
 				Role:    "assistant",
-				Content: content,
+				Content: response.Choices[0].Messages.Content,
 			},
 			FinishReason: response.Choices[0].FinishReason,
 		}
@@ -86,111 +81,84 @@ func streamResponseTencent2OpenAI(TencentResponse *TencentChatResponse) *dto.Cha
 	}
 	if len(TencentResponse.Choices) > 0 {
 		var choice dto.ChatCompletionsStreamResponseChoice
-		choice.Delta.Content = TencentResponse.Choices[0].Delta.Content
+		choice.Delta.SetContentString(TencentResponse.Choices[0].Delta.Content)
 		if TencentResponse.Choices[0].FinishReason == "stop" {
-			choice.FinishReason = &relaycommon.StopFinishReason
+			choice.FinishReason = &constant.FinishReasonStop
 		}
 		response.Choices = append(response.Choices, choice)
 	}
 	return &response
 }
 
-func tencentStreamHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIErrorWithStatusCode, string) {
+func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	var responseText string
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
-		if atEOF && len(data) == 0 {
-			return 0, nil, nil
+	scanner.Split(bufio.ScanLines)
+
+	helper.SetEventStreamHeaders(c)
+
+	for scanner.Scan() {
+		data := scanner.Text()
+		if len(data) < 5 || !strings.HasPrefix(data, "data:") {
+			continue
 		}
-		if i := strings.Index(string(data), "\n"); i >= 0 {
-			return i + 1, data[0:i], nil
+		data = strings.TrimPrefix(data, "data:")
+
+		var tencentResponse TencentChatResponse
+		err := common.Unmarshal([]byte(data), &tencentResponse)
+		if err != nil {
+			common.SysLog("error unmarshalling stream response: " + err.Error())
+			continue
 		}
-		if atEOF {
-			return len(data), data, nil
+
+		response := streamResponseTencent2OpenAI(&tencentResponse)
+		if len(response.Choices) != 0 {
+			responseText += response.Choices[0].Delta.GetContentString()
 		}
-		return 0, nil, nil
-	})
-	dataChan := make(chan string)
-	stopChan := make(chan bool)
-	go func() {
-		for scanner.Scan() {
-			data := scanner.Text()
-			if len(data) < 5 { // ignore blank line or wrong format
-				continue
-			}
-			if data[:5] != "data:" {
-				continue
-			}
-			data = data[5:]
-			dataChan <- data
+
+		err = helper.ObjectData(c, response)
+		if err != nil {
+			common.SysLog(err.Error())
 		}
-		stopChan <- true
-	}()
-	service.SetEventStreamHeaders(c)
-	c.Stream(func(w io.Writer) bool {
-		select {
-		case data := <-dataChan:
-			var TencentResponse TencentChatResponse
-			err := json.Unmarshal([]byte(data), &TencentResponse)
-			if err != nil {
-				common.SysError("error unmarshalling stream response: " + err.Error())
-				return true
-			}
-			response := streamResponseTencent2OpenAI(&TencentResponse)
-			if len(response.Choices) != 0 {
-				responseText += response.Choices[0].Delta.Content
-			}
-			jsonResponse, err := json.Marshal(response)
-			if err != nil {
-				common.SysError("error marshalling stream response: " + err.Error())
-				return true
-			}
-			c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonResponse)})
-			return true
-		case <-stopChan:
-			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
-			return false
-		}
-	})
-	err := resp.Body.Close()
-	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), ""
 	}
-	return nil, responseText
+
+	if err := scanner.Err(); err != nil {
+		common.SysLog("error reading stream: " + err.Error())
+	}
+
+	helper.Done(c)
+
+	service.CloseResponseBodyGracefully(resp)
+
+	return service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens()), nil
 }
 
-func tencentHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
-	var TencentResponse TencentChatResponse
+func tencentHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	var tencentSb TencentChatResponseSB
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return service.OpenAIErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError), nil
+		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
-	err = resp.Body.Close()
+	service.CloseResponseBodyGracefully(resp)
+	err = json.Unmarshal(responseBody, &tencentSb)
 	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	err = json.Unmarshal(responseBody, &TencentResponse)
+	if tencentSb.Response.Error.Code != 0 {
+		return nil, types.WithOpenAIError(types.OpenAIError{
+			Message: tencentSb.Response.Error.Message,
+			Code:    tencentSb.Response.Error.Code,
+		}, resp.StatusCode)
+	}
+	fullTextResponse := responseTencent2OpenAI(&tencentSb.Response)
+	jsonResponse, err := common.Marshal(fullTextResponse)
 	if err != nil {
-		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil
-	}
-	if TencentResponse.Error.Code != 0 {
-		return &dto.OpenAIErrorWithStatusCode{
-			Error: dto.OpenAIError{
-				Message: TencentResponse.Error.Message,
-				Code:    TencentResponse.Error.Code,
-			},
-			StatusCode: resp.StatusCode,
-		}, nil
-	}
-	fullTextResponse := responseTencent2OpenAI(&TencentResponse)
-	jsonResponse, err := json.Marshal(fullTextResponse)
-	if err != nil {
-		return service.OpenAIErrorWrapper(err, "marshal_response_body_failed", http.StatusInternalServerError), nil
+		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
-	_, err = c.Writer.Write(jsonResponse)
-	return nil, &fullTextResponse.Usage
+	service.IOCopyBytesGracefully(c, resp, jsonResponse)
+	return &fullTextResponse.Usage, nil
 }
 
 func parseTencentConfig(config string) (appId int64, secretId string, secretKey string, err error) {
@@ -205,29 +173,62 @@ func parseTencentConfig(config string) (appId int64, secretId string, secretKey 
 	return
 }
 
-func getTencentSign(req TencentChatRequest, secretKey string) string {
-	params := make([]string, 0)
-	params = append(params, "app_id="+strconv.FormatInt(req.AppId, 10))
-	params = append(params, "secret_id="+req.SecretId)
-	params = append(params, "timestamp="+strconv.FormatInt(req.Timestamp, 10))
-	params = append(params, "query_id="+req.QueryID)
-	params = append(params, "temperature="+strconv.FormatFloat(req.Temperature, 'f', -1, 64))
-	params = append(params, "top_p="+strconv.FormatFloat(req.TopP, 'f', -1, 64))
-	params = append(params, "stream="+strconv.Itoa(req.Stream))
-	params = append(params, "expired="+strconv.FormatInt(req.Expired, 10))
+func sha256hex(s string) string {
+	b := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(b[:])
+}
 
-	var messageStr string
-	for _, msg := range req.Messages {
-		messageStr += fmt.Sprintf(`{"role":"%s","content":"%s"},`, msg.Role, msg.Content)
-	}
-	messageStr = strings.TrimSuffix(messageStr, ",")
-	params = append(params, "messages=["+messageStr+"]")
+func hmacSha256(s, key string) string {
+	hashed := hmac.New(sha256.New, []byte(key))
+	hashed.Write([]byte(s))
+	return string(hashed.Sum(nil))
+}
 
-	sort.Sort(sort.StringSlice(params))
-	url := "hunyuan.cloud.tencent.com/hyllm/v1/chat/completions?" + strings.Join(params, "&")
-	mac := hmac.New(sha1.New, []byte(secretKey))
-	signURL := url
-	mac.Write([]byte(signURL))
-	sign := mac.Sum([]byte(nil))
-	return base64.StdEncoding.EncodeToString(sign)
+func getTencentSign(req TencentChatRequest, adaptor *Adaptor, secId, secKey string) string {
+	// build canonical request string
+	host := "hunyuan.tencentcloudapi.com"
+	httpRequestMethod := "POST"
+	canonicalURI := "/"
+	canonicalQueryString := ""
+	canonicalHeaders := fmt.Sprintf("content-type:%s\nhost:%s\nx-tc-action:%s\n",
+		"application/json", host, strings.ToLower(adaptor.Action))
+	signedHeaders := "content-type;host;x-tc-action"
+	payload, _ := json.Marshal(req)
+	hashedRequestPayload := sha256hex(string(payload))
+	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s",
+		httpRequestMethod,
+		canonicalURI,
+		canonicalQueryString,
+		canonicalHeaders,
+		signedHeaders,
+		hashedRequestPayload)
+	// build string to sign
+	algorithm := "TC3-HMAC-SHA256"
+	requestTimestamp := strconv.FormatInt(adaptor.Timestamp, 10)
+	timestamp, _ := strconv.ParseInt(requestTimestamp, 10, 64)
+	t := time.Unix(timestamp, 0).UTC()
+	// must be the format 2006-01-02, ref to package time for more info
+	date := t.Format("2006-01-02")
+	credentialScope := fmt.Sprintf("%s/%s/tc3_request", date, "hunyuan")
+	hashedCanonicalRequest := sha256hex(canonicalRequest)
+	string2sign := fmt.Sprintf("%s\n%s\n%s\n%s",
+		algorithm,
+		requestTimestamp,
+		credentialScope,
+		hashedCanonicalRequest)
+
+	// sign string
+	secretDate := hmacSha256(date, "TC3"+secKey)
+	secretService := hmacSha256("hunyuan", secretDate)
+	secretKey := hmacSha256("tc3_request", secretService)
+	signature := hex.EncodeToString([]byte(hmacSha256(string2sign, secretKey)))
+
+	// build authorization
+	authorization := fmt.Sprintf("%s Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+		algorithm,
+		secId,
+		credentialScope,
+		signedHeaders,
+		signature)
+	return authorization
 }

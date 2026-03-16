@@ -1,7 +1,5 @@
 package constant
 
-var MjNotifyEnabled = false
-
 const (
 	MjErrorUnknown = 5
 	MjRequestError = 4
@@ -23,6 +21,9 @@ const (
 	MjActionLowVariation  = "LOW_VARIATION"
 	MjActionPan           = "PAN"
 	MjActionSwapFace      = "SWAP_FACE"
+	MjActionUpload        = "UPLOAD"
+	MjActionVideo         = "VIDEO"
+	MjActionEdits         = "EDITS"
 )
 
 var MidjourneyModel2Action = map[string]string{
@@ -41,4 +42,7 @@ var MidjourneyModel2Action = map[string]string{
 	"mj_low_variation":  MjActionLowVariation,
 	"mj_pan":            MjActionPan,
 	"swap_face":         MjActionSwapFace,
+	"mj_upload":         MjActionUpload,
+	"mj_video":          MjActionVideo,
+	"mj_edits":          MjActionEdits,
 }

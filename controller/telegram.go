@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"one-api/common"
-	"one-api/model"
+	"net/http"
 	"sort"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -48,6 +50,13 @@ func TelegramBind(c *gin.Context) {
 		})
 		return
 	}
+	if user.Id == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "用户已注销",
+		})
+		return
+	}
 	user.TelegramId = telegramId
 	if err := user.Update(false); err != nil {
 		c.JSON(200, gin.H{
@@ -57,7 +66,7 @@ func TelegramBind(c *gin.Context) {
 		return
 	}
 
-	c.Redirect(302, "/setting")
+	c.Redirect(302, "/console/personal")
 }
 
 func TelegramLogin(c *gin.Context) {

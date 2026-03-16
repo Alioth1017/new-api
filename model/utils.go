@@ -1,9 +1,14 @@
 package model
 
 import (
-	"one-api/common"
+	"errors"
 	"sync"
 	"time"
+
+	"github.com/QuantumNous/new-api/common"
+
+	"github.com/bytedance/gopkg/util/gopool"
+	"gorm.io/gorm"
 )
 
 const (
@@ -26,12 +31,12 @@ func init() {
 }
 
 func InitBatchUpdater() {
-	go func() {
+	gopool.Go(func() {
 		for {
 			time.Sleep(time.Duration(common.BatchUpdateInterval) * time.Second)
 			batchUpdate()
 		}
-	}()
+	})
 }
 
 func addNewRecord(type_ int, id int, value int) {
@@ -45,6 +50,22 @@ func addNewRecord(type_ int, id int, value int) {
 }
 
 func batchUpdate() {
+	// check if there's any data to update
+	hasData := false
+	for i := 0; i < BatchUpdateTypeCount; i++ {
+		batchUpdateLocks[i].Lock()
+		if len(batchUpdateStores[i]) > 0 {
+			hasData = true
+			batchUpdateLocks[i].Unlock()
+			break
+		}
+		batchUpdateLocks[i].Unlock()
+	}
+
+	if !hasData {
+		return
+	}
+
 	common.SysLog("batch update started")
 	for i := 0; i < BatchUpdateTypeCount; i++ {
 		batchUpdateLocks[i].Lock()
@@ -57,12 +78,12 @@ func batchUpdate() {
 			case BatchUpdateTypeUserQuota:
 				err := increaseUserQuota(key, value)
 				if err != nil {
-					common.SysError("failed to batch update user quota: " + err.Error())
+					common.SysLog("failed to batch update user quota: " + err.Error())
 				}
 			case BatchUpdateTypeTokenQuota:
 				err := increaseTokenQuota(key, value)
 				if err != nil {
-					common.SysError("failed to batch update token quota: " + err.Error())
+					common.SysLog("failed to batch update token quota: " + err.Error())
 				}
 			case BatchUpdateTypeUsedQuota:
 				updateUserUsedQuota(key, value)
@@ -74,4 +95,18 @@ func batchUpdate() {
 		}
 	}
 	common.SysLog("batch update finished")
+}
+
+func RecordExist(err error) (bool, error) {
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	return false, err
+}
+
+func shouldUpdateRedis(fromDB bool, err error) bool {
+	return common.RedisEnabled && fromDB && err == nil
 }

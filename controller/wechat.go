@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"net/http"
-	"one-api/common"
-	"one-api/model"
 	"strconv"
 	"time"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
+
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-gonic/gin"
 )
 
 type wechatLoginResponse struct {
@@ -78,6 +81,13 @@ func WeChatAuth(c *gin.Context) {
 			})
 			return
 		}
+		if user.Id == 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "用户已注销",
+			})
+			return
+		}
 	} else {
 		if common.RegisterEnabled {
 			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
@@ -135,25 +145,20 @@ func WeChatBind(c *gin.Context) {
 		})
 		return
 	}
-	id := c.GetInt("id")
+	session := sessions.Default(c)
+	id := session.Get("id")
 	user := model.User{
-		Id: id,
+		Id: id.(int),
 	}
 	err = user.FillUserById()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		common.ApiError(c, err)
 		return
 	}
 	user.WeChatId = wechatId
 	err = user.Update(false)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		common.ApiError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
